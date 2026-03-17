@@ -21,6 +21,8 @@ function getDb() {
     ssl: 'require',
     idle_timeout: 20,
     connect_timeout: 10,
+    // pgBouncer(Transaction Pooler) 사용 시 prepared statement 비활성화 필수
+    prepare: false,
   });
   _db = drizzle(client, { schema });
   return _db;
