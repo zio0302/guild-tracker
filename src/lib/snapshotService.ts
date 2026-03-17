@@ -153,7 +153,7 @@ export async function collectDailySnapshot() {
     }
   }
 
-  // 4) 전투력 스냅샷 저장
+  // 4) 전투력 스냅샷 저장 (오늘 + 과거 히스토리 포함)
   const scrapedMap = new Map(guildData.members.map(m => [m.nickname, m]));
   const freshActiveMembers = await db
     .select()
@@ -164,7 +164,7 @@ export async function collectDailySnapshot() {
     const scraped = scrapedMap.get(member.currentNickname);
     if (!scraped) continue;
 
-    // 직전 스냅샷 조회
+    // 직전 스냅샷 조회 (전일 대비 delta 계산용)
     const [prevSnap] = await db
       .select()
       .from(combatPowerSnapshots)
@@ -172,7 +172,7 @@ export async function collectDailySnapshot() {
       .orderBy(desc(combatPowerSnapshots.snapshotDate))
       .limit(1);
 
-    // UPSERT (같은 날짜면 덮어쓰기)
+    // 오늘 스냅샷 UPSERT
     await db.insert(combatPowerSnapshots)
       .values({
         memberId: member.id,
@@ -187,8 +187,26 @@ export async function collectDailySnapshot() {
           combatPower: scraped.combatPower,
           level: scraped.level,
           powerDelta: prevSnap ? calcPowerDelta(scraped.combatPower, prevSnap.combatPower) : null,
+          createdAt: new Date(),
         },
       });
+
+    // 과거 히스토리 UPSERT (오늘 이전 날짜만)
+    if (scraped.history && scraped.history.length > 0) {
+      const pastHistory = scraped.history.filter(h => h.date < today && h.power !== '0');
+      for (const hist of pastHistory) {
+        await db.insert(combatPowerSnapshots)
+          .values({
+            memberId: member.id,
+            combatPower: hist.power,
+            level: scraped.level, // 과거 레벨은 알 수 없어 현재값 사용
+            snapshotDate: hist.date,
+            powerDelta: null,
+          })
+          .onConflictDoNothing(); // 이미 있으면 건너뜀 (덮어쓰지 않음)
+      }
+      console.log(`  📚 ${member.currentNickname}: 히스토리 ${pastHistory.length}건 저장`);
+    }
 
     await db.update(guildMembers)
       .set({ lastSeenAt: today, updatedAt: new Date() })
@@ -198,3 +216,4 @@ export async function collectDailySnapshot() {
   console.log(`🎉 [${today}] 수집 완료!\n`);
   return { date: today, memberCount: freshActiveMembers.length };
 }
+
