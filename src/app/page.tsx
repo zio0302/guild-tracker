@@ -69,8 +69,12 @@ export default function DashboardPage() {
     try {
       const res = await fetch('/api/members');
       const data = await res.json();
-      setMembers(data);
+      // API 오류 시 빈 배열로 처리 (크래시 방지)
+      setMembers(Array.isArray(data) ? data : []);
       setLastUpdated(new Date().toLocaleString('ko-KR'));
+    } catch (err) {
+      console.error('멤버 데이터 로드 실패:', err);
+      setMembers([]);
     } finally {
       setLoading(false);
     }
