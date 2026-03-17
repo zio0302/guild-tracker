@@ -2,7 +2,7 @@
  * 스냅샷 수집 핵심 서비스
  * API Route나 Cron에서 호출하여 스크래핑 → 변동 감지 → DB 저장을 처리한다.
  */
-import { eq, and, desc, gte, lte } from 'drizzle-orm';
+import { eq, and, desc, inArray, sql } from 'drizzle-orm';
 import db from '@/db/client';
 import {
   guildMembers,
@@ -153,18 +153,22 @@ export async function collectDailySnapshot() {
     }
   }
 
-  // 4) 전투력 스냅샷 저장 (오늘 + 과거 히스토리 포함)
+  // 4) 전투력 스냅샷 저장 (오늘 + 과거 히스토리 일괄 배치)
   const scrapedMap = new Map(guildData.members.map(m => [m.nickname, m]));
   const freshActiveMembers = await db
     .select()
     .from(guildMembers)
     .where(eq(guildMembers.status, 'active'));
 
+  // 오늘 스냅샷 값 + 히스토리 값을 한 번에 모아서 배치 INSERT
+  const todayRows: typeof combatPowerSnapshots.$inferInsert[] = [];
+  const historyRows: typeof combatPowerSnapshots.$inferInsert[] = [];
+
   for (const member of freshActiveMembers) {
     const scraped = scrapedMap.get(member.currentNickname);
     if (!scraped) continue;
 
-    // 직전 스냅샷 조회 (전일 대비 delta 계산용)
+    // 직전 스냅샷 조회 (delta 계산용)
     const [prevSnap] = await db
       .select()
       .from(combatPowerSnapshots)
@@ -172,45 +176,63 @@ export async function collectDailySnapshot() {
       .orderBy(desc(combatPowerSnapshots.snapshotDate))
       .limit(1);
 
-    // 오늘 스냅샷 UPSERT
+    todayRows.push({
+      memberId: member.id,
+      combatPower: scraped.combatPower,
+      level: scraped.level,
+      snapshotDate: today,
+      powerDelta: prevSnap ? calcPowerDelta(scraped.combatPower, prevSnap.combatPower) : null,
+    });
+
+    // 과거 히스토리 (오늘 이전, 값이 0이 아닌 것만)
+    if (scraped.history?.length) {
+      const past = scraped.history.filter(h => h.date < today && h.power !== '0');
+      for (const h of past) {
+        historyRows.push({
+          memberId: member.id,
+          combatPower: h.power,
+          level: scraped.level,
+          snapshotDate: h.date,
+          powerDelta: null,
+        });
+      }
+    }
+  }
+
+  // 오늘 스냅샷 배치 UPSERT
+  if (todayRows.length > 0) {
     await db.insert(combatPowerSnapshots)
-      .values({
-        memberId: member.id,
-        combatPower: scraped.combatPower,
-        level: scraped.level,
-        snapshotDate: today,
-        powerDelta: prevSnap ? calcPowerDelta(scraped.combatPower, prevSnap.combatPower) : null,
-      })
+      .values(todayRows)
       .onConflictDoUpdate({
         target: [combatPowerSnapshots.memberId, combatPowerSnapshots.snapshotDate],
         set: {
-          combatPower: scraped.combatPower,
-          level: scraped.level,
-          powerDelta: prevSnap ? calcPowerDelta(scraped.combatPower, prevSnap.combatPower) : null,
-          createdAt: new Date(),
+          combatPower: sql`excluded.combat_power`,
+          level: sql`excluded.level`,
+          powerDelta: sql`excluded.power_delta`,
+          createdAt: sql`now()`,
         },
       });
+  }
 
-    // 과거 히스토리 UPSERT (오늘 이전 날짜만)
-    if (scraped.history && scraped.history.length > 0) {
-      const pastHistory = scraped.history.filter(h => h.date < today && h.power !== '0');
-      for (const hist of pastHistory) {
-        await db.insert(combatPowerSnapshots)
-          .values({
-            memberId: member.id,
-            combatPower: hist.power,
-            level: scraped.level, // 과거 레벨은 알 수 없어 현재값 사용
-            snapshotDate: hist.date,
-            powerDelta: null,
-          })
-          .onConflictDoNothing(); // 이미 있으면 건너뜀 (덮어쓰지 않음)
-      }
-      console.log(`  📚 ${member.currentNickname}: 히스토리 ${pastHistory.length}건 저장`);
+  // 히스토리 배치 INSERT (이미 있으면 건너뜀) — Vercel 함수 10MB body 제한 고려해 500개씩 분할
+  if (historyRows.length > 0) {
+    const CHUNK = 500;
+    for (let i = 0; i < historyRows.length; i += CHUNK) {
+      await db.insert(combatPowerSnapshots)
+        .values(historyRows.slice(i, i + CHUNK))
+        .onConflictDoNothing();
     }
+    console.log(`📚 히스토리 ${historyRows.length}건 저장 완료`);
+  }
 
+  // lastSeenAt 일괄 업데이트 (inArray로 한 번에)
+  const activeIds = freshActiveMembers
+    .filter(m => scrapedMap.has(m.currentNickname))
+    .map(m => m.id);
+  if (activeIds.length > 0) {
     await db.update(guildMembers)
       .set({ lastSeenAt: today, updatedAt: new Date() })
-      .where(eq(guildMembers.id, member.id));
+      .where(inArray(guildMembers.id, activeIds));
   }
 
   console.log(`🎉 [${today}] 수집 완료!\n`);
