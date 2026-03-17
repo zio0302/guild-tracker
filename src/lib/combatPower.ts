@@ -31,6 +31,23 @@ export function formatCombatPower(powerStr: string): string {
   return (isNeg ? '-' : '') + (parts.join(' ') || '0');
 }
 
+/** "201853000000000" → "20조 1853억" (만단위 생략 — 카드/히스토리 컬럼용) */
+export function formatCombatPowerShort(powerStr: string): string {
+  if (!powerStr || powerStr === '0') return '0';
+  const isNeg = powerStr.startsWith('-');
+  const abs = isNeg ? powerStr.slice(1) : powerStr;
+
+  const power = BigInt(abs);
+  const 조단위 = power / 1_000_000_000_000n;
+  const 억단위 = (power % 1_000_000_000_000n) / 100_000_000n;
+
+  const parts: string[] = [];
+  if (조단위 > 0n) parts.push(`${조단위}조`);
+  if (억단위 > 0n) parts.push(`${억단위}억`);
+
+  return (isNeg ? '-' : '') + (parts.join(' ') || '0');
+}
+
 /** 두 전투력의 차이 계산 */
 export function calcPowerDelta(current: string, previous: string): string {
   return (BigInt(current) - BigInt(previous)).toString();
