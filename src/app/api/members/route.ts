@@ -1,5 +1,5 @@
 /**
- * GET  /api/members - 현재 활성 길드원 + 7일전/30일전 전투력 + 성장률
+ * GET  /api/members - 현재 활성 길드원 + 7일전/20일전 전투력 + 7일 성장률
  * POST /api/members - 수동 스크래핑 트리거
  */
 import { NextResponse } from 'next/server';
@@ -15,7 +15,7 @@ export async function GET() {
   try {
     const today = getTodayKST();
     const date7ago = getDateDaysAgo(7);
-    const date30ago = getDateDaysAgo(30);
+    const date20ago = getDateDaysAgo(20); // mgf.gg 최대 20일 조회 가능
 
     // 활성 멤버 목록
     const members = await db
@@ -27,14 +27,14 @@ export async function GET() {
 
     const memberIds = members.map((m) => m.id);
 
-    // 오늘~30일전 스냅샷 일괄 조회 (N+1 방지)
+    // 오늘~20일전 스냅샷 일괄 조회 (N+1 방지)
     const snapshots = await db
       .select()
       .from(combatPowerSnapshots)
       .where(
         and(
           inArray(combatPowerSnapshots.memberId, memberIds),
-          gte(combatPowerSnapshots.snapshotDate, date30ago),
+          gte(combatPowerSnapshots.snapshotDate, date20ago),
           lte(combatPowerSnapshots.snapshotDate, today),
         )
       );
@@ -58,22 +58,18 @@ export async function GET() {
 
       const todaySnap  = findClosest(memberSnaps, today);
       const snap7ago   = findClosest(memberSnaps, date7ago);
-      const snap30ago  = findClosest(memberSnaps, date30ago);
+      const snap20ago  = findClosest(memberSnaps, date20ago);
 
-      const currentPower   = todaySnap?.combatPower   ?? null;
-      const power7DaysAgo  = snap7ago?.combatPower    ?? null;
-      const power30DaysAgo = snap30ago?.combatPower   ?? null;
+      const currentPower   = todaySnap?.combatPower  ?? null;
+      const power7DaysAgo  = snap7ago?.combatPower   ?? null;
+      const power20DaysAgo = snap20ago?.combatPower  ?? null;
 
-      // 7일 성장량 & 성장률
+      // 7일 성장률 계산
       const growth7d = currentPower && power7DaysAgo
         ? calcPowerDelta(currentPower, power7DaysAgo) : null;
       const growth7dRate = growth7d && power7DaysAgo && BigInt(power7DaysAgo) > 0n
         ? parseFloat((Number(BigInt(growth7d) * 10000n / BigInt(power7DaysAgo)) / 100).toFixed(2))
         : null;
-
-      // 30일 성장량
-      const growth30d = currentPower && power30DaysAgo
-        ? calcPowerDelta(currentPower, power30DaysAgo) : null;
 
       return {
         id: m.id,
@@ -89,16 +85,12 @@ export async function GET() {
         // 7일 전
         power7DaysAgo,
         power7DaysAgoFormatted: power7DaysAgo ? formatCombatPower(power7DaysAgo) : '-',
-        // 30일 전
-        power30DaysAgo,
-        power30DaysAgoFormatted: power30DaysAgo ? formatCombatPower(power30DaysAgo) : '-',
-        // 7일 성장
+        // 20일 전 (mgf.gg 제공 최대)
+        power20DaysAgo,
+        power20DaysAgoFormatted: power20DaysAgo ? formatCombatPower(power20DaysAgo) : '-',
+        // 7일 성장률
         growth7d,
-        growth7dFormatted: growth7d ? formatCombatPower(growth7d) : '-',
         growth7dRate,
-        // 30일 성장
-        growth30d,
-        growth30dFormatted: growth30d ? formatCombatPower(growth30d) : '-',
         // 전일 대비
         powerDelta: todaySnap?.powerDelta ?? null,
         powerDeltaFormatted: todaySnap?.powerDelta ? formatCombatPower(todaySnap.powerDelta) : null,
