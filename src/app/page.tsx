@@ -176,7 +176,16 @@ export default function DashboardPage() {
           {[
             { label: '총 길드원', value: `${members.length}명` },
             { label: '데이터 보유', value: `${members.filter(m => m.combatPower).length}명` },
-            { label: '7일 성장률 TOP', value: sorted.find(m => m.growth7dRate !== null)?.nickname ?? '-' },
+            {
+              label: '7일 성장률 TOP',
+              value: (() => {
+                // sorted(현재 정렬키)가 아닌, members에서 성장률 최대값을 찾아야 함
+                const topMember = [...members]
+                  .filter(m => m.growth7dRate !== null)
+                  .sort((a, b) => b.growth7dRate! - a.growth7dRate!)[0];
+                return topMember ? `${topMember.nickname} (+${topMember.growth7dRate}%)` : '-';
+              })()
+            },
             {
               label: '평균 성장률',
               value: (() => {
