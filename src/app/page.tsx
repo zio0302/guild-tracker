@@ -1,80 +1,68 @@
 /**
- * 메인 대시보드 페이지 (서버 컴포넌트)
- * 길드원 전투력 성장 랭킹 + 기간 선택 + 수동 스크래핑 버튼
+ * 메인 대시보드 — 실시간 수집 상태 + 7일전/30일전 전투력 + 7일 성장률 테이블
  */
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from 'recharts';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
-// ── 타입 정의 ──
+// ── 타입 ──────────────────────────────────────────────
 interface MemberData {
   id: number;
   nickname: string;
   job: string;
-  combatPowerFormatted: string;
-  powerDelta: string | null;
-  powerDeltaFormatted: string | null;
   level: number | null;
+  combatPower: string | null;
+  combatPowerFormatted: string;
+  power7DaysAgo: string | null;
+  power7DaysAgoFormatted: string;
+  power30DaysAgo: string | null;
+  power30DaysAgoFormatted: string;
+  growth7d: string | null;
+  growth7dFormatted: string;
+  growth7dRate: number | null;
+  growth30d: string | null;
+  growth30dFormatted: string;
+  powerDeltaFormatted: string | null;
 }
 
-interface CompareData {
-  id: number;
-  nickname: string;
-  job: string;
-  growthFormatted: string | null;
-  growth: string | null;
-  toPowerFormatted: string | null;
+type SortKey = 'combatPower' | 'growth7d' | 'growth30d' | 'nickname';
+
+// 성장률에 따른 색상
+function rateColor(rate: number | null) {
+  if (rate === null) return 'text-gray-500';
+  if (rate >= 5)  return 'text-emerald-400 font-bold';
+  if (rate >= 2)  return 'text-green-400';
+  if (rate >= 0)  return 'text-blue-400';
+  return 'text-red-400';
 }
 
-const PERIOD_OPTIONS = [
-  { label: '오늘', days: 0 },
-  { label: '1주일', days: 7 },
-  { label: '1개월', days: 30 },
-  { label: '3개월', days: 90 },
-];
-
-function getDateRange(days: number) {
-  const to = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - days);
-  const fmt = (d: Date) => d.toISOString().split('T')[0];
-  return { from: fmt(from), to: fmt(to) };
+function deltaSign(val: string | null) {
+  if (!val) return '';
+  return val.startsWith('-') ? '' : '+';
 }
 
 export default function DashboardPage() {
   const [members, setMembers] = useState<MemberData[]>([]);
-  const [compareData, setCompareData] = useState<CompareData[]>([]);
-  const [selectedPeriod, setSelectedPeriod] = useState(0); // 인덱스
   const [loading, setLoading] = useState(true);
-  const [scraping, setScraping] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>('combatPower');
+  const [collectStatus, setCollectStatus] = useState<
+    'idle' | 'running' | 'success' | 'error'
+  >('idle');
+  const [collectMsg, setCollectMsg] = useState('');
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 기간에 따른 성장 랭킹 조회
-  const fetchCompare = useCallback(async (days: number) => {
-    if (days === 0) {
-      // 오늘 기준: 오늘 delta만 사용
-      return;
-    }
-    const { from, to } = getDateRange(days);
-    const res = await fetch(`/api/snapshot/compare?from=${from}&to=${to}`);
-    const data = await res.json();
-    setCompareData(data);
-  }, []);
-
+  // ── 데이터 로드 ──────────────────────────────────────
   const fetchMembers = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await fetch('/api/members');
       const data = await res.json();
-      // API 오류 시 빈 배열로 처리 (크래시 방지)
       setMembers(Array.isArray(data) ? data : []);
       setLastUpdated(new Date().toLocaleString('ko-KR'));
-    } catch (err) {
-      console.error('멤버 데이터 로드 실패:', err);
+      return Array.isArray(data) ? data.length : 0;
+    } catch {
       setMembers([]);
+      return 0;
     } finally {
       setLoading(false);
     }
@@ -84,159 +72,221 @@ export default function DashboardPage() {
     fetchMembers();
   }, [fetchMembers]);
 
-  useEffect(() => {
-    fetchCompare(PERIOD_OPTIONS[selectedPeriod].days);
-  }, [selectedPeriod, fetchCompare]);
+  // ── 수동 수집 ─────────────────────────────────────────
+  const handleCollect = async () => {
+    if (collectStatus === 'running') return;
+    setCollectStatus('running');
+    setCollectMsg('MGF.GG에서 데이터 수집 중... (1~3분 소요)');
 
-  // 수동 스크래핑
-  const handleScrape = async () => {
-    setScraping(true);
-    try {
-      await fetch('/api/members', { method: 'POST' });
-      await fetchMembers();
-      alert('✅ 수집 완료!');
-    } catch {
-      alert('❌ 수집 실패');
-    } finally {
-      setScraping(false);
-    }
+    // 수집 API 비동기 호출
+    fetch('/api/members', { method: 'POST' })
+      .then(async (res) => {
+        const data = await res.json();
+        if (data.success) {
+          setCollectStatus('success');
+          setCollectMsg(`✅ 수집 완료 — ${data.memberCount ?? 0}명 업데이트`);
+        } else {
+          throw new Error(data.error);
+        }
+      })
+      .catch((err) => {
+        setCollectStatus('error');
+        setCollectMsg(`❌ 오류: ${err.message}`);
+      })
+      .finally(async () => {
+        await fetchMembers(); // 수집 후 즉시 갱신
+      });
+
+    // 수집 중에도 5초마다 데이터 폴링 (실시간 반영 느낌)
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      const cnt = await fetchMembers();
+      if (cnt > 0) {
+        if (pollRef.current) clearInterval(pollRef.current);
+      }
+    }, 5000);
+
+    // 3분 후 폴링 종료
+    setTimeout(() => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    }, 180_000);
   };
 
-  // 차트용 데이터 가공
-  const displayData = selectedPeriod === 0
-    ? members.slice(0, 15)
-    : compareData.slice(0, 15);
+  // ── 정렬 ──────────────────────────────────────────────
+  const sorted = [...members].sort((a, b) => {
+    if (sortKey === 'nickname') return a.nickname.localeCompare(b.nickname);
+    if (sortKey === 'growth7d') {
+      if (!a.growth7d) return 1;
+      if (!b.growth7d) return -1;
+      return BigInt(b.growth7d) > BigInt(a.growth7d) ? 1 : -1;
+    }
+    if (sortKey === 'growth30d') {
+      if (!a.growth30d) return 1;
+      if (!b.growth30d) return -1;
+      return BigInt(b.growth30d) > BigInt(a.growth30d) ? 1 : -1;
+    }
+    // combatPower (default)
+    if (!a.combatPower) return 1;
+    if (!b.combatPower) return -1;
+    return BigInt(b.combatPower) > BigInt(a.combatPower) ? 1 : -1;
+  });
 
-  const chartData = displayData.map((m) => ({
-    name: 'nickname' in m ? m.nickname : '',
-    value: selectedPeriod === 0
-      ? parseInt((m as MemberData).powerDelta ?? '0', 10) / 1e8  // 억 단위
-      : parseInt((m as CompareData).growth ?? '0', 10) / 1e8,
-    label: selectedPeriod === 0
-      ? (m as MemberData).powerDeltaFormatted ?? '+0'
-      : (m as CompareData).growthFormatted ?? '+0',
-  }));
+  const SortBtn = ({ k, label }: { k: SortKey; label: string }) => (
+    <button
+      onClick={() => setSortKey(k)}
+      className={`px-3 py-1 text-xs rounded-full transition-colors ${
+        sortKey === k
+          ? 'bg-red-600 text-white'
+          : 'bg-gray-800 text-gray-400 hover:text-white'
+      }`}
+    >
+      {label}
+    </button>
+  );
 
   return (
-    <div className="space-y-8">
-      {/* 헤더 섹션 */}
-      <div className="flex items-center justify-between">
+    <div className="space-y-6">
+      {/* ── 헤더 ── */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="text-2xl font-bold text-white">전투력 성장 랭킹</h2>
+          <h2 className="text-2xl font-bold text-white">길드원 전투력 현황</h2>
           {lastUpdated && (
-            <p className="text-sm text-gray-400 mt-1">마지막 업데이트: {lastUpdated}</p>
+            <p className="text-xs text-gray-500 mt-0.5">갱신: {lastUpdated}</p>
           )}
         </div>
-        <button
-          onClick={handleScrape}
-          disabled={scraping}
-          className="px-4 py-2 bg-maple-600 hover:bg-maple-700 disabled:bg-gray-700 
-                     text-white text-sm font-medium rounded-lg transition-colors
-                     disabled:cursor-not-allowed"
-        >
-          {scraping ? '⏳ 수집 중...' : '🔄 지금 수집'}
-        </button>
-      </div>
 
-      {/* 기간 선택 탭 */}
-      <div className="flex gap-2">
-        {PERIOD_OPTIONS.map((opt, i) => (
+        <div className="flex flex-col items-end gap-2">
           <button
-            key={opt.label}
-            onClick={() => setSelectedPeriod(i)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              selectedPeriod === i
-                ? 'bg-maple-600 text-white'
-                : 'bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700'
+            onClick={handleCollect}
+            disabled={collectStatus === 'running'}
+            className={`px-5 py-2 text-sm font-semibold rounded-xl transition-all ${
+              collectStatus === 'running'
+                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                : 'bg-red-600 hover:bg-red-500 active:scale-95 text-white'
             }`}
           >
-            {opt.label}
+            {collectStatus === 'running' ? (
+              <span className="flex items-center gap-2">
+                <span className="inline-block w-3 h-3 border-2 border-gray-400 border-t-white rounded-full animate-spin" />
+                수집 중...
+              </span>
+            ) : '🔄 지금 수집'}
           </button>
-        ))}
+
+          {collectMsg && (
+            <p className={`text-xs ${
+              collectStatus === 'error' ? 'text-red-400'
+              : collectStatus === 'success' ? 'text-green-400'
+              : 'text-gray-400 animate-pulse'
+            }`}>
+              {collectMsg}
+            </p>
+          )}
+        </div>
       </div>
 
-      {/* 차트 */}
-      {!loading && chartData.length > 0 && (
-        <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
-          <h3 className="text-sm font-medium text-gray-400 mb-4">
-            {PERIOD_OPTIONS[selectedPeriod].label} 성장량 (억 단위)
-          </h3>
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis dataKey="name" tick={{ fill: '#9CA3AF', fontSize: 12 }} />
-              <YAxis tick={{ fill: '#9CA3AF', fontSize: 12 }} />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '8px' }}
-                labelStyle={{ color: '#F9FAFB' }}
-                formatter={(value: number) => [`${value.toFixed(1)}억`, '성장량']}
-              />
-              <Bar dataKey="value" fill="#d92626" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+      {/* ── 정렬 옵션 ── */}
+      <div className="flex gap-2 flex-wrap">
+        <span className="text-xs text-gray-500 self-center">정렬:</span>
+        <SortBtn k="combatPower" label="현재 전투력 ↓" />
+        <SortBtn k="growth7d"    label="7일 성장량 ↓" />
+        <SortBtn k="growth30d"   label="30일 성장량 ↓" />
+        <SortBtn k="nickname"    label="이름순" />
+      </div>
+
+      {/* ── 요약 카드 ── */}
+      {!loading && members.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { label: '총 길드원', value: `${members.length}명` },
+            { label: '평균 전투력', value: (() => {
+              const valid = members.filter(m => m.combatPower);
+              if (!valid.length) return '-';
+              const avg = valid.reduce((s, m) => s + BigInt(m.combatPower!), 0n) / BigInt(valid.length);
+              // 간단히 조 단위로
+              return `${(Number(avg) / 1e12).toFixed(1)}조`;
+            })() },
+            { label: '7일 성장 TOP', value: sorted.find(m => m.growth7d)?.nickname ?? '-' },
+            { label: '데이터 있음', value: `${members.filter(m => m.combatPower).length}명` },
+          ].map(card => (
+            <div key={card.label} className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+              <p className="text-xs text-gray-500">{card.label}</p>
+              <p className="text-lg font-bold text-white mt-1">{card.value}</p>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* 멤버 테이블 */}
-      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-        <table className="w-full text-sm">
+      {/* ── 테이블 ── */}
+      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-x-auto">
+        <table className="w-full text-sm whitespace-nowrap">
           <thead>
-            <tr className="border-b border-gray-800">
-              <th className="text-left py-3 px-4 text-gray-400 font-medium w-8">#</th>
-              <th className="text-left py-3 px-4 text-gray-400 font-medium">닉네임</th>
-              <th className="text-left py-3 px-4 text-gray-400 font-medium">직업</th>
-              <th className="text-right py-3 px-4 text-gray-400 font-medium">현재 전투력</th>
-              <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                {PERIOD_OPTIONS[selectedPeriod].label} 성장
-              </th>
+            <tr className="border-b border-gray-800 text-xs text-gray-400">
+              <th className="text-left py-3 px-4 w-8">#</th>
+              <th className="text-left py-3 px-4">닉네임</th>
+              <th className="text-left py-3 px-3">직업</th>
+              <th className="text-right py-3 px-4">현재 전투력</th>
+              <th className="text-right py-3 px-4 text-blue-400">7일 전</th>
+              <th className="text-right py-3 px-4 text-purple-400">30일 전</th>
+              <th className="text-right py-3 px-4 text-green-400">7일 성장</th>
+              <th className="text-right py-3 px-3 text-emerald-400">성장률</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} className="text-center py-12 text-gray-500">
-                  데이터 불러오는 중...
-                </td>
-              </tr>
-            ) : members.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="text-center py-12 text-gray-500">
-                  <div>
-                    <p>데이터가 없습니다.</p>
-                    <p className="text-xs mt-1">오른쪽 위 &apos;지금 수집&apos; 버튼을 눌러 시작하세요.</p>
+                <td colSpan={8} className="text-center py-16 text-gray-500">
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="inline-block w-4 h-4 border-2 border-gray-600 border-t-gray-300 rounded-full animate-spin" />
+                    불러오는 중...
                   </div>
                 </td>
               </tr>
-            ) : members.map((member, idx) => {
-              const compareItem = compareData.find(c => c.id === member.id);
-              const growthFormatted = selectedPeriod === 0
-                ? member.powerDeltaFormatted
-                : compareItem?.growthFormatted ?? null;
-              const growth = selectedPeriod === 0
-                ? member.powerDelta
-                : compareItem?.growth ?? null;
-              const isPositive = growth && !growth.startsWith('-');
-
+            ) : sorted.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="text-center py-16 text-gray-500">
+                  <p className="text-base">아직 데이터가 없습니다</p>
+                  <p className="text-xs mt-2 text-gray-600">
+                    우상단 <span className="text-red-400 font-bold">🔄 지금 수집</span> 버튼을 눌러 첫 데이터를 수집하세요
+                  </p>
+                </td>
+              </tr>
+            ) : sorted.map((m, idx) => {
+              const positive7d = m.growth7d && !m.growth7d.startsWith('-');
               return (
                 <tr
-                  key={member.id}
+                  key={m.id}
+                  onClick={() => window.location.href = `/members/${m.id}`}
                   className="border-b border-gray-800/50 hover:bg-gray-800/40 transition-colors cursor-pointer"
-                  onClick={() => window.location.href = `/members/${member.id}`}
                 >
                   <td className="py-3 px-4 text-gray-500">{idx + 1}</td>
-                  <td className="py-3 px-4 font-medium text-white">{member.nickname}</td>
-                  <td className="py-3 px-4 text-gray-400">{member.job}</td>
-                  <td className="py-3 px-4 text-right font-mono text-gray-200">
-                    {member.combatPowerFormatted}
+                  <td className="py-3 px-4">
+                    <span className="font-semibold text-white">{m.nickname}</span>
+                    {m.level && (
+                      <span className="ml-2 text-xs text-gray-500">Lv.{m.level}</span>
+                    )}
                   </td>
-                  <td className={`py-3 px-4 text-right font-mono font-medium ${
-                    !growth ? 'text-gray-500'
-                    : isPositive ? 'text-green-400'
-                    : 'text-red-400'
+                  <td className="py-3 px-3 text-gray-400 text-xs max-w-[100px] truncate">{m.job}</td>
+                  <td className="py-3 px-4 text-right font-mono text-white">
+                    {m.combatPowerFormatted}
+                  </td>
+                  <td className="py-3 px-4 text-right font-mono text-blue-300 text-xs">
+                    {m.power7DaysAgoFormatted}
+                  </td>
+                  <td className="py-3 px-4 text-right font-mono text-purple-300 text-xs">
+                    {m.power30DaysAgoFormatted}
+                  </td>
+                  <td className={`py-3 px-4 text-right font-mono text-xs ${
+                    !m.growth7d ? 'text-gray-600'
+                    : positive7d ? 'text-green-400' : 'text-red-400'
                   }`}>
-                    {growth
-                      ? `${isPositive ? '+' : ''}${growthFormatted}`
-                      : '-'}
+                    {m.growth7d ? `${deltaSign(m.growth7d)}${m.growth7dFormatted}` : '-'}
+                  </td>
+                  <td className={`py-3 px-3 text-right text-xs font-bold ${rateColor(m.growth7dRate)}`}>
+                    {m.growth7dRate !== null ? `${m.growth7dRate > 0 ? '+' : ''}${m.growth7dRate}%` : '-'}
                   </td>
                 </tr>
               );
@@ -244,6 +294,12 @@ export default function DashboardPage() {
           </tbody>
         </table>
       </div>
+
+      {!loading && sorted.length > 0 && (
+        <p className="text-xs text-gray-600 text-center">
+          클릭하면 상세 전투력 추이 차트를 볼 수 있습니다
+        </p>
+      )}
     </div>
   );
 }

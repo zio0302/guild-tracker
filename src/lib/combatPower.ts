@@ -52,3 +52,10 @@ export function getTodayKST(): string {
     .toISOString()
     .split('T')[0];
 }
+
+/** N일 전 날짜를 "YYYY-MM-DD" 형식으로 반환 (KST) */
+export function getDateDaysAgo(days: number): string {
+  return new Date(Date.now() + 9 * 60 * 60 * 1000 - days * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .split('T')[0];
+}
