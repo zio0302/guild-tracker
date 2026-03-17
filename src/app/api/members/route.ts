@@ -23,7 +23,7 @@ export async function GET() {
       .from(guildMembers)
       .where(eq(guildMembers.status, 'active'));
 
-    if (members.length === 0) return NextResponse.json([]);
+    if (members.length === 0) return NextResponse.json({ members: [], collectedAt: null });
 
     const memberIds = members.map((m) => m.id);
 
@@ -112,7 +112,20 @@ export async function GET() {
       return BigInt(b.combatPower) > BigInt(a.combatPower) ? 1 : -1;
     });
 
-    return NextResponse.json(result);
+    // 가장 최근 스냅샷의 수집 시각 (KST 포맷)
+    const latestSnap = snapshots.sort((a, b) =>
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    )[0];
+    let collectedAt: string | null = null;
+    if (latestSnap?.createdAt) {
+      const kst = new Date(new Date(latestSnap.createdAt).getTime() + 9 * 60 * 60 * 1000);
+      collectedAt = kst.toLocaleString('ko-KR', {
+        year: 'numeric', month: 'long', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      }) + ' 기준';
+    }
+
+    return NextResponse.json({ members: result, collectedAt });
   } catch (err) {
     console.error('[GET /api/members]', err);
     return NextResponse.json({ error: String(err) }, { status: 500 });

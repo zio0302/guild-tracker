@@ -50,6 +50,7 @@ export default function DashboardPage() {
   >('idle');
   const [collectMsg, setCollectMsg] = useState('');
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [collectedAt, setCollectedAt] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── 데이터 로드 ──────────────────────────────────────
@@ -57,9 +58,12 @@ export default function DashboardPage() {
     try {
       const res = await fetch('/api/members');
       const data = await res.json();
-      setMembers(Array.isArray(data) ? data : []);
+      // 응답: { members: [...], collectedAt: "2026년 3월 17일 12시 기준" }
+      const list = Array.isArray(data) ? data : (data.members ?? []);
+      setMembers(list);
+      if (data.collectedAt) setCollectedAt(data.collectedAt);
       setLastUpdated(new Date().toLocaleString('ko-KR'));
-      return Array.isArray(data) ? data.length : 0;
+      return list.length;
     } catch {
       setMembers([]);
       return 0;
@@ -153,8 +157,11 @@ export default function DashboardPage() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold text-white">길드원 전투력 현황</h2>
+          {collectedAt && (
+            <p className="text-xs text-yellow-400/80 mt-0.5 font-medium">📅 {collectedAt}</p>
+          )}
           {lastUpdated && (
-            <p className="text-xs text-gray-500 mt-0.5">갱신: {lastUpdated}</p>
+            <p className="text-xs text-gray-600 mt-0.5">페이지 갱신: {lastUpdated}</p>
           )}
         </div>
 
