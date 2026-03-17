@@ -108,10 +108,18 @@ async function scrapeCharacterPage(nickname: string): Promise<ScrapedMember> {
   const combatPower = parts[0] ? parseCombatPower(parts[0]) : '0';
   const job = parts[2] ?? '알 수 없음';
 
-  // 레벨: OG title "왕바부 - Lv.82 - MGF.GG"
-  const title = $('meta[property="og:title"]').attr('content') ?? '';
-  const levelMatch = title.match(/Lv\.(\d+)/i);
-  const level = parseInt(levelMatch?.[1] ?? '0', 10);
+  // 레벨: HTML 본문 .stat-box에서 파싱
+  // <div class="stat-label">레벨</div>
+  // <div class="stat-value">Lv. 100</div>
+  let level = 0;
+  $('.stat-box').each((_, el) => {
+    const label = $(el).find('.stat-label').text().trim();
+    if (label === '레벨') {
+      const val = $(el).find('.stat-value').text().trim(); // "Lv. 100"
+      const m = val.match(/(\d+)/);
+      if (m) level = parseInt(m[1], 10);
+    }
+  });
 
   // ── ApexCharts inline JS에서 히스토리 파싱 ──────────────
   // categories: ["02-21","02-22",...,"03-17"]
