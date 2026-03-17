@@ -4,6 +4,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { formatCombatPower } from '@/lib/combatPower';
 
 // ── 타입 ──────────────────────────────────────────────
 interface MemberData {
@@ -171,38 +172,80 @@ export default function DashboardPage() {
       </div>
 
       {/* ── 요약 카드 ── */}
-      {!loading && members.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[
-            { label: '총 길드원', value: `${members.length}명` },
-            { label: '데이터 보유', value: `${members.filter(m => m.combatPower).length}명` },
-            {
-              label: '7일 성장률 TOP',
-              value: (() => {
-                // sorted(현재 정렬키)가 아닌, members에서 성장률 최대값을 찾아야 함
-                const topMember = [...members]
-                  .filter(m => m.growth7dRate !== null)
-                  .sort((a, b) => b.growth7dRate! - a.growth7dRate!)[0];
-                return topMember ? `${topMember.nickname} (+${topMember.growth7dRate}%)` : '-';
-              })()
-            },
-            {
-              label: '평균 성장률',
-              value: (() => {
-                const valid = members.filter(m => m.growth7dRate !== null);
-                if (!valid.length) return '-';
-                const avg = valid.reduce((s, m) => s + m.growth7dRate!, 0) / valid.length;
-                return `${avg.toFixed(1)}%`;
-              })()
-            },
-          ].map(card => (
-            <div key={card.label} className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-              <p className="text-xs text-gray-500">{card.label}</p>
-              <p className="text-lg font-bold text-white mt-1">{card.value}</p>
+      {!loading && members.length > 0 && (() => {
+        // 평균 전투력 (BigInt 정밀도 유지)
+        const withPower  = members.filter(m => m.combatPower);
+        const avgNow  = withPower.length
+          ? withPower.reduce((s, m) => s + BigInt(m.combatPower!), 0n) / BigInt(withPower.length)
+          : null;
+        const with7ago = members.filter(m => m.power7DaysAgo);
+        const avg7ago = with7ago.length
+          ? with7ago.reduce((s, m) => s + BigInt(m.power7DaysAgo!), 0n) / BigInt(with7ago.length)
+          : null;
+        const avgDiff = avgNow && avg7ago ? avgNow - avg7ago : null;
+
+        // 성장률 TOP
+        const topMember = [...members]
+          .filter(m => m.growth7dRate !== null)
+          .sort((a, b) => b.growth7dRate! - a.growth7dRate!)[0];
+        // 평균 성장률
+        const validRate = members.filter(m => m.growth7dRate !== null);
+        const avgRate = validRate.length
+          ? validRate.reduce((s, m) => s + m.growth7dRate!, 0) / validRate.length
+          : null;
+
+        return (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {/* 총 길드원 */}
+            <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+              <p className="text-xs text-gray-500">총 길드원</p>
+              <p className="text-lg font-bold text-white mt-1">{members.length}명</p>
+              <p className="text-xs text-gray-600 mt-1">데이터 보유 {withPower.length}명</p>
             </div>
-          ))}
-        </div>
-      )}
+
+            {/* 길드 평균 전투력 */}
+            <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+              <p className="text-xs text-gray-500">길드 평균 전투력</p>
+              <p className="text-lg font-bold text-white mt-1">
+                {avgNow ? formatCombatPower(avgNow.toString()) : '-'}
+              </p>
+              {avgDiff !== null && (
+                <p className={`text-xs mt-1 font-semibold ${
+                  avgDiff > 0n ? 'text-emerald-400' : avgDiff < 0n ? 'text-red-400' : 'text-gray-500'
+                }`}>
+                  {avgDiff > 0n ? '▲' : avgDiff < 0n ? '▼' : '─'}
+                  {' '}{formatCombatPower((avgDiff < 0n ? -avgDiff : avgDiff).toString())} vs 7일전
+                </p>
+              )}
+              {!avgDiff && avg7ago === null && (
+                <p className="text-xs mt-1 text-gray-600">7일전 데이터 없음</p>
+              )}
+            </div>
+
+            {/* 7일 성장률 TOP */}
+            <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+              <p className="text-xs text-gray-500">7일 성장률 TOP</p>
+              <p className="text-base font-bold text-emerald-400 mt-1 truncate">
+                {topMember ? topMember.nickname : '-'}
+              </p>
+              {topMember && (
+                <p className="text-xs text-emerald-400/70 mt-1">+{topMember.growth7dRate}%</p>
+              )}
+            </div>
+
+            {/* 길드 평균 성장률 */}
+            <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+              <p className="text-xs text-gray-500">길드 평균 성장률</p>
+              <p className={`text-lg font-bold mt-1 ${
+                avgRate !== null && avgRate >= 0 ? 'text-emerald-400' : 'text-red-400'
+              }`}>
+                {avgRate !== null ? `${avgRate >= 0 ? '+' : ''}${avgRate.toFixed(1)}%` : '-'}
+              </p>
+              <p className="text-xs text-gray-600 mt-1">7일간 평균</p>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── 테이블 ── */}
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-x-auto">
